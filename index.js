@@ -85,18 +85,22 @@ function resetDaily() {
 }
 
 // ⏱ Smart delay (MAIN LOGIC)
-function smartDelay() {
-    resetDaily();
+let lastPauseHour = null;
 
-    // Normal delay (4–10 sec)
+function smartDelay() {
+    const now = new Date();
+    const currentHour = now.getHours();
+
+    // 🔹 Normal delay (4–10 sec)
     let delay = Math.floor(Math.random() * (10000 - 4000 + 1)) + 4000;
 
-    // Rare 2–3 min pause (10–15/day)
-    if (longPauseCount < maxLongPauses && Math.random() < 0.12) {
-        longPauseCount++;
+    // 🔹 Allow ONLY 1 long pause per hour
+    if (lastPauseHour !== currentHour && Math.random() < 0.4) {
+        lastPauseHour = currentHour;
 
-        const longPause = (2 + Math.random()) * 60 * 1000;
-        console.log(`⏸ Short pause ${(longPause/60000).toFixed(1)} min (${longPauseCount}/${maxLongPauses})`);
+        const longPause = (2 + Math.random()) * 60 * 1000; // 2–3 min
+
+        console.log(`⏸ Hourly pause ${(longPause / 60000).toFixed(1)} min (hour ${currentHour})`);
 
         return longPause;
     }
