@@ -92,7 +92,7 @@ function smartDelay() {
     const currentHour = now.getHours();
 
     // 🔹 Normal delay (4–10 sec)
-    let delay = Math.floor(Math.random() * (10000 - 4000 + 1)) + 4000;
+    let delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
 
     // 🔹 Allow ONLY 1 long pause per hour
     if (lastPauseHour !== currentHour && Math.random() < 0.4) {
