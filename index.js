@@ -6,7 +6,7 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const SECRET = process.env.SECRET || 'mysecret123';
 
 // ── PASTE YOUR GROUP IDs HERE ──────────────────────────────────
