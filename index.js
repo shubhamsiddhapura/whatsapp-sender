@@ -44,12 +44,9 @@ const TARGETS = [
 ];
 
 // ── DELAYS ──
-const DELAY_MIN = 5000;
-const DELAY_MAX = 12000;
-
-let isReady = false;
-const queue = [];
-let processing = false;
+let longPauseCount = 0;
+let maxLongPauses = Math.floor(Math.random() * 6) + 10;
+let lastResetDate = null;
 
 // 🌙 Sleep system
 let todayStartTime = null;
@@ -58,30 +55,90 @@ function getTodayStartTime() {
     if (todayStartTime) return todayStartTime;
 
     const base = 8 * 60;
-    const randomOffset = Math.floor(Math.random() * 60); // 8–9 AM
+    const randomOffset = Math.floor(Math.random() * 60);
     todayStartTime = base + randomOffset;
 
-    console.log(`🌅 Today start time: ${(todayStartTime / 60).toFixed(2)} hrs`);
+    console.log(`🌅 Start time: ${(todayStartTime / 60).toFixed(2)} hrs`);
     return todayStartTime;
 }
 
 function isSleepTime() {
     const now = new Date();
-    const currentTime = now.getHours() * 60 + now.getMinutes();
+    const current = now.getHours() * 60 + now.getMinutes();
 
-    const sleepStart = 30; // 12:30 AM
-    const sleepEnd = getTodayStartTime();
-
-    return currentTime >= sleepStart && currentTime < sleepEnd;
+    return current >= 30 && current < getTodayStartTime();
 }
 
-// 🧍 Break system
-function shouldTakeBreak() {
-    return Math.random() < 0.15;
+// 🔄 Reset daily counters
+function resetDaily() {
+    const today = new Date().toDateString();
+
+    if (lastResetDate !== today) {
+        longPauseCount = 0;
+        maxLongPauses = Math.floor(Math.random() * 6) + 10;
+        lastResetDate = today;
+
+        generateDailyBreaks();
+
+        console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
+    }
 }
 
-function getBreakTime() {
-    return (15 + Math.random() * 10) * 60 * 1000;
+// ⏱ Smart delay (MAIN LOGIC)
+function smartDelay() {
+    resetDaily();
+
+    // Normal delay (4–10 sec)
+    let delay = Math.floor(Math.random() * (10000 - 4000 + 1)) + 4000;
+
+    // Rare 2–3 min pause (10–15/day)
+    if (longPauseCount < maxLongPauses && Math.random() < 0.12) {
+        longPauseCount++;
+
+        const longPause = (2 + Math.random()) * 60 * 1000;
+        console.log(`⏸ Short pause ${(longPause/60000).toFixed(1)} min (${longPauseCount}/${maxLongPauses})`);
+
+        return longPause;
+    }
+
+    return delay;
+}
+
+// 🧍 BIG BREAK SYSTEM (only between batches)
+let breaks = [];
+
+function generateDailyBreaks() {
+    breaks = [];
+
+    function addBreaks(count, start, end) {
+        for (let i = 0; i < count; i++) {
+            const time = Math.floor(Math.random() * (end - start)) + start;
+            breaks.push({ time, taken: false });
+        }
+    }
+
+    addBreaks(3, 8 * 60, 14 * 60);
+    addBreaks(2, 14 * 60, 20 * 60);
+    addBreaks(1, 20 * 60, 24 * 60);
+
+    breaks.sort((a, b) => a.time - b.time);
+}
+
+function shouldTakeBigBreak() {
+    const now = new Date();
+    const current = now.getHours() * 60 + now.getMinutes();
+
+    for (let b of breaks) {
+        if (!b.taken && current >= b.time) {
+            b.taken = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+function getBigBreak() {
+    return (12 + Math.random() * 8) * 60 * 1000;
 }
 
 // ── WhatsApp Client ──
@@ -102,18 +159,8 @@ const client = new Client({
     }
 });
 
-client.on('qr', () => {
-    console.log('❌ QR scan needed!');
-});
-
 client.on('ready', () => {
-    isReady = true;
     console.log('✅ WhatsApp connected!');
-});
-
-client.on('disconnected', () => {
-    isReady = false;
-    client.initialize();
 });
 
 // ── Helpers ──
@@ -121,24 +168,29 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
-function randomDelay() {
-    return Math.floor(Math.random() * (DELAY_MAX - DELAY_MIN + 1)) + DELAY_MIN;
-}
-
 // ── Queue ──
+let isReady = false;
+const queue = [];
+let processing = false;
+
+client.on('ready', () => isReady = true);
+client.on('disconnected', () => {
+    isReady = false;
+    client.initialize();
+});
+
 async function processQueue() {
     if (processing || queue.length === 0) return;
     processing = true;
 
     while (queue.length > 0) {
+
         if (!isReady) {
-            console.log('⏸ Waiting for WhatsApp...');
             await sleep(5000);
             continue;
         }
 
         const job = queue.shift();
-        console.log(`📤 Sending to ${TARGETS.length} groups`);
 
         for (let i = 0; i < TARGETS.length; i++) {
 
@@ -164,31 +216,30 @@ async function processQueue() {
                     await client.sendMessage(jid, job.text);
                 }
 
-                console.log(`✅ [${i + 1}/${TARGETS.length}] Sent`);
+                console.log(`✅ ${i + 1}/${TARGETS.length}`);
 
             } catch (err) {
-                console.error(`❌ Failed: ${err.message}`);
+                console.error(err.message);
             }
 
-            // ⏱ Normal delay
+            // ⏱ Delay (smart)
             if (i < TARGETS.length - 1) {
-                const delay = randomDelay();
-                console.log(`⏳ ${delay / 1000}s`);
+                const delay = smartDelay();
                 await sleep(delay);
-            }
-
-            // 🧍 Random break
-            if (shouldTakeBreak()) {
-                const breakTime = getBreakTime();
-                console.log(`🧍 Break ${(breakTime / 60000).toFixed(1)} min`);
-                await sleep(breakTime);
             }
         }
 
-        console.log(`✅ Completed batch`);
+        console.log("✅ Batch done");
+
+        // 🧍 Big break AFTER batch
+        if (shouldTakeBigBreak()) {
+            const breakTime = getBigBreak();
+            console.log(`🧍 Big break ${(breakTime/60000).toFixed(1)} min`);
+            await sleep(breakTime);
+        }
 
         if (queue.length > 0) {
-            await sleep(randomDelay() * 2);
+            await sleep(smartDelay());
         }
     }
 
@@ -211,18 +262,18 @@ app.post('/send', upload.single('image'), (req, res) => {
         return res.status(503).json({ error: 'WhatsApp not ready' });
     }
 
-    const text = req.body?.text || '';
-    const imageBuffer = req.file?.buffer || null;
+    queue.push({
+        text: req.body?.text || '',
+        imageBuffer: req.file?.buffer || null
+    });
 
-    queue.push({ text, imageBuffer });
     processQueue();
 
     res.json({ success: true });
 });
 
-// ── Start ──
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on ${PORT}`);
+    console.log(`🚀 Running on ${PORT}`);
 });
 
 client.initialize();
