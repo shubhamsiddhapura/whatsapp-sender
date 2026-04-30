@@ -54,11 +54,10 @@ let todayStartTime = null;
 function getTodayStartTime() {
     if (todayStartTime) return todayStartTime;
 
-    const base = 8 * 60;
-    const randomOffset = Math.floor(Math.random() * 60);
-    todayStartTime = base + randomOffset;
+    // Random start between 8:00 AM (480 min) and 9:00 AM (540 min)
+    todayStartTime = 480 + Math.floor(Math.random() * 60);
 
-    console.log(`🌅 Start time: ${(todayStartTime / 60).toFixed(2)} hrs`);
+    console.log(`🌅 WA Start time today: ${Math.floor(todayStartTime/60)}:${String(todayStartTime%60).padStart(2,'0')}`);
     return todayStartTime;
 }
 
@@ -77,9 +76,8 @@ function resetDaily() {
         longPauseCount = 0;
         maxLongPauses = Math.floor(Math.random() * 6) + 10;
         lastResetDate = today;
-
+        todayStartTime = null; // ← ADD THIS LINE to reset start time each day
         generateDailyBreaks();
-
         console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
     }
 }
