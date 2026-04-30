@@ -43,14 +43,7 @@ const TARGETS = [
     "120363049791618063@g.us"
 ];
 
-// ── DELAYS ──
-let longPauseCount = 0;
-let maxLongPauses = Math.floor(Math.random() * 6) + 10;
-let lastResetDate = null;
-
-// 🌙 Sleep system
-let todayStartTime = null;
-
+// ── IST HELPERS ──
 function getISTMinutes() {
     const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
@@ -58,10 +51,19 @@ function getISTMinutes() {
     return ist.getUTCHours() * 60 + ist.getUTCMinutes();
 }
 
+function getISTDateString() {
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(Date.now() + istOffset);
+    return `${ist.getUTCFullYear()}-${ist.getUTCMonth()}-${ist.getUTCDate()}`;
+}
+
+// ── SLEEP SYSTEM ──
+let todayStartTime = null;
+let lastResetDate = null;
+
 function getTodayStartTime() {
     if (todayStartTime) return todayStartTime;
-    // Random start between 8:00 AM (480 min) and 9:00 AM (540 min)
-    todayStartTime = 480 + Math.floor(Math.random() * 60);
+    todayStartTime = 480 + Math.floor(Math.random() * 60); // 8:00–9:00 AM IST
     const h = Math.floor(todayStartTime / 60);
     const m = String(todayStartTime % 60).padStart(2, '0');
     console.log(`🌅 WA Start time today: ${h}:${m} IST`);
@@ -71,65 +73,52 @@ function getTodayStartTime() {
 function isSleepTime() {
     const current = getISTMinutes();
     const startTime = getTodayStartTime();
-
-    // Sleep ONLY between 00:30 and startTime (e.g. 8:xx AM)
-    if (current >= startTime) return false;  // after start → awake
-    if (current < 30) return false;           // before 00:30 → awake
-    return true;                              // 00:30 to startTime → sleep
+    if (current >= startTime) return false;
+    if (current < 30) return false;
+    return true;
 }
 
-// 🔄 Reset daily counters
-function resetDaily() {
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(Date.now() + istOffset);
-    const today = `${ist.getUTCFullYear()}-${ist.getUTCMonth()}-${ist.getUTCDate()}`;
-
-    if (lastResetDate !== today) {
-        longPauseCount = 0;
-        maxLongPauses = Math.floor(Math.random() * 6) + 10;
-        lastResetDate = today;
-        todayStartTime = null; // reset so new random start time is picked
-        generateDailyBreaks();
-        console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
-    }
-}
-
-// ⏱ Smart delay
-let lastPauseHour = null;
-
-function smartDelay() {
-    const now = new Date();
-    const currentHour = now.getHours();
-
-    let delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
-
-    if (lastPauseHour !== currentHour && Math.random() < 0.4) {
-        lastPauseHour = currentHour;
-        const longPause = (2 + Math.random()) * 60 * 1000;
-        console.log(`⏸ Hourly pause ${(longPause / 60000).toFixed(1)} min`);
-        return longPause;
-    }
-
-    return delay;
-}
-
-// 🧍 BIG BREAK SYSTEM
+// ── DAILY RESET ──
+let maxLongPauses = Math.floor(Math.random() * 6) + 10;
 let breaks = [];
+let lastPauseHour = null;
 
 function generateDailyBreaks() {
     breaks = [];
-
     function addBreaks(count, start, end) {
         for (let i = 0; i < count; i++) {
             const time = Math.floor(Math.random() * (end - start)) + start;
             breaks.push({ time, taken: false });
         }
     }
-
     addBreaks(3, 8 * 60, 14 * 60);
     addBreaks(2, 14 * 60, 20 * 60);
     addBreaks(1, 20 * 60, 24 * 60);
     breaks.sort((a, b) => a.time - b.time);
+}
+
+function resetDaily() {
+    const today = getISTDateString();
+    if (lastResetDate !== today) {
+        maxLongPauses = Math.floor(Math.random() * 6) + 10;
+        lastResetDate = today;
+        todayStartTime = null;
+        generateDailyBreaks();
+        console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
+    }
+}
+
+// ── DELAYS ──
+function smartDelay() {
+    const currentHour = new Date().getHours();
+    let delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
+    if (lastPauseHour !== currentHour && Math.random() < 0.4) {
+        lastPauseHour = currentHour;
+        const longPause = (2 + Math.random()) * 60 * 1000;
+        console.log(`⏸ Hourly pause ${(longPause / 60000).toFixed(1)} min`);
+        return longPause;
+    }
+    return delay;
 }
 
 function shouldTakeBigBreak() {
@@ -147,9 +136,14 @@ function getBigBreak() {
     return (12 + Math.random() * 8) * 60 * 1000;
 }
 
-// ── WhatsApp Client ──
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+// ── WHATSAPP CLIENT ──
 let isReady = false;
 let isReconnecting = false;
+let client = null;
 
 function createClient() {
     return new Client({
@@ -170,13 +164,38 @@ function createClient() {
     });
 }
 
-let client = createClient();
+function scheduleReconnect() {
+    if (isReconnecting) return;
+    isReconnecting = true;
+    isReady = false;
+    console.log('🔄 Reconnecting in 15s...');
+    setTimeout(async () => {
+        try {
+            await client.destroy();
+            console.log('🗑️ Old client destroyed');
+        } catch (e) {
+            console.log('⚠️ Destroy error (ignored):', e.message);
+        }
+        client = createClient();
+        setupClientEvents();
+        client.initialize();
+    }, 15000);
+}
 
 function setupClientEvents() {
+    client.on('qr', () => {
+        console.log('📱 QR code received — scan it!');
+    });
+
     client.on('ready', () => {
-        console.log('✅ WhatsApp connected!');
-        isReady = true;
+        console.log('✅ WhatsApp connected! Warming up for 15s...');
         isReconnecting = false;
+        // Warm-up delay — wait before marking ready to send
+        setTimeout(() => {
+            isReady = true;
+            console.log('✅ WA Ready to send!');
+            processQueue(); // resume queued jobs
+        }, 15000);
     });
 
     client.on('disconnected', (reason) => {
@@ -192,33 +211,18 @@ function setupClientEvents() {
     });
 }
 
-function scheduleReconnect() {
-    if (isReconnecting) return;
-    isReconnecting = true;
-    console.log('🔄 Reconnecting in 10s...');
-    setTimeout(async () => {
-        try {
-            await client.destroy();
-        } catch (e) {
-            console.log('⚠️ Destroy error (ignored):', e.message);
-        }
-        client = createClient();
-        setupClientEvents();
-        client.initialize();
-    }, 10000);
-}
-
-// Handle unhandled Puppeteer/frame errors globally
+// Handle Puppeteer crashes globally
 process.on('unhandledRejection', (reason) => {
     const msg = reason?.message || String(reason);
     if (
         msg.includes('detached Frame') ||
         msg.includes('Target closed') ||
         msg.includes('Session closed') ||
-        msg.includes('Protocol error')
+        msg.includes('Protocol error') ||
+        msg.includes('Cannot read properties of null')
     ) {
-        console.log(`⚠️ Puppeteer error (auto-recovering): ${msg}`);
-        if (isReady) {
+        console.log(`⚠️ Puppeteer crash caught globally: ${msg}`);
+        if (!isReconnecting) {
             isReady = false;
             scheduleReconnect();
         }
@@ -227,12 +231,7 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection:', reason);
 });
 
-// ── Helpers ──
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
-
-// ── Queue ──
+// ── QUEUE ──
 const queue = [];
 let processing = false;
 
@@ -246,8 +245,8 @@ async function processQueue() {
 
         // Wait for WhatsApp to be ready
         if (!isReady) {
-            console.log('⏳ Waiting for WA to reconnect...');
-            await sleep(5000);
+            console.log('⏳ Waiting for WA to be ready...');
+            await sleep(15000);
             continue;
         }
 
@@ -259,18 +258,18 @@ async function processQueue() {
             // 🌙 Sleep check
             while (isSleepTime()) {
                 const current = getISTMinutes();
-                console.log(`🌙 Sleeping... IST ${Math.floor(current/60)}:${String(current%60).padStart(2,'0')}`);
+                console.log(`🌙 Quiet hours... IST ${Math.floor(current / 60)}:${String(current % 60).padStart(2, '0')}`);
                 await sleep(60000);
                 resetDaily();
             }
 
             // Check WA still ready before each message
             if (!isReady) {
-                console.log('⚠️ WA not ready mid-batch — waiting...');
-                await sleep(10000);
+                console.log('⚠️ WA lost mid-batch — waiting 20s...');
+                await sleep(20000);
                 if (!isReady) {
                     console.log('⚠️ Still not ready — re-queuing job');
-                    queue.unshift(job); // put job back
+                    queue.unshift(job);
                     batchAborted = true;
                     break;
                 }
@@ -299,14 +298,14 @@ async function processQueue() {
                     msg.includes('Session closed') ||
                     msg.includes('Protocol error')
                 ) {
-                    console.log(`⚠️ Puppeteer crash on ${i + 1}/${TARGETS.length} — reconnecting...`);
+                    console.log(`⚠️ Puppeteer crash on ${i + 1}/${TARGETS.length} — re-queuing & reconnecting...`);
                     isReady = false;
                     scheduleReconnect();
-                    queue.unshift(job); // re-queue to retry
+                    queue.unshift(job);
                     batchAborted = true;
                     break;
                 }
-                console.error(`❌ Send error [${i + 1}]: ${msg}`);
+                console.error(`❌ Send error [${i + 1}/${TARGETS.length}]: ${msg}`);
             }
 
             // ⏱ Delay between messages
@@ -317,11 +316,12 @@ async function processQueue() {
         }
 
         if (batchAborted) {
-            await sleep(15000); // wait before retrying
+            console.log('⏳ Waiting 20s before retry...');
+            await sleep(20000);
             continue;
         }
 
-        console.log("✅ Batch done");
+        console.log('✅ Batch done');
 
         // 🧍 Big break AFTER batch
         if (shouldTakeBigBreak()) {
@@ -340,7 +340,12 @@ async function processQueue() {
 
 // ── API ──
 app.get('/', (req, res) => {
-    res.json({ status: 'running', whatsapp: isReady, queue: queue.length });
+    res.json({
+        status: 'running',
+        whatsapp: isReady,
+        queue: queue.length,
+        sleeping: isSleepTime()
+    });
 });
 
 app.post('/send', upload.single('image'), (req, res) => {
@@ -368,5 +373,8 @@ app.listen(PORT, () => {
     console.log(`🚀 Running on ${PORT}`);
 });
 
+// ── START ──
+generateDailyBreaks();
+client = createClient();
 setupClientEvents();
 client.initialize();
