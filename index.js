@@ -62,26 +62,32 @@ function getTodayStartTime() {
 }
 
 function isSleepTime() {
+    // Force IST timezone
     const now = new Date();
-    const current = now.getHours() * 60 + now.getMinutes();
+    const istOffset = 5.5 * 60 * 60 * 1000; // IST = UTC+5:30
+    const ist = new Date(now.getTime() + istOffset);
+    
+    const current = ist.getUTCHours() * 60 + ist.getUTCMinutes();
     const startTime = getTodayStartTime();
 
-    // Quiet zone is ONLY between 00:30 and startTime (e.g. 8:01 AM)
-    // Outside that window (evening/day), never sleep
-    if (current >= startTime) return false;   // after start → awake
-    if (current < 30) return false;            // before 00:30 (e.g. 23:xx, 0:00–0:29) → awake
-    return true;                               // 00:30 to startTime → sleep
+    console.log(`🕐 IST time: ${ist.getUTCHours()}:${String(ist.getUTCMinutes()).padStart(2,'0')} | current=${current} | startTime=${startTime} | sleep=${current >= 30 && current < startTime}`);
+
+    if (current >= startTime) return false;  // after start → awake
+    if (current < 30) return false;           // before 00:30 → awake
+    return true;                              // 00:30 to startTime → sleep
 }
 
 // 🔄 Reset daily counters
 function resetDaily() {
-    const today = new Date().toDateString();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(Date.now() + istOffset);
+    const today = ist.toUTCString().slice(0, 16); // date string in IST
 
     if (lastResetDate !== today) {
         longPauseCount = 0;
         maxLongPauses = Math.floor(Math.random() * 6) + 10;
         lastResetDate = today;
-        todayStartTime = null; // ← ADD THIS LINE to reset start time each day
+        todayStartTime = null;
         generateDailyBreaks();
         console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
     }
