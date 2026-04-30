@@ -64,8 +64,13 @@ function getTodayStartTime() {
 function isSleepTime() {
     const now = new Date();
     const current = now.getHours() * 60 + now.getMinutes();
+    const startTime = getTodayStartTime();
 
-    return current >= 30 && current < getTodayStartTime();
+    // Quiet zone is ONLY between 00:30 and startTime (e.g. 8:01 AM)
+    // Outside that window (evening/day), never sleep
+    if (current >= startTime) return false;   // after start → awake
+    if (current < 30) return false;            // before 00:30 (e.g. 23:xx, 0:00–0:29) → awake
+    return true;                               // 00:30 to startTime → sleep
 }
 
 // 🔄 Reset daily counters
