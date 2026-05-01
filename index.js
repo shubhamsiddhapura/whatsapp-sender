@@ -9,7 +9,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 const SECRET = process.env.SECRET || 'mysecret123';
 
-// ── TARGET GROUPS ──
+// ── TARGET GROUPS (for /send — bulk) ──
 const TARGETS = [
     "917595918075-1496324435@g.us",
     "917016873944-1593607947@g.us",
@@ -190,11 +190,10 @@ function setupClientEvents() {
     client.on('ready', () => {
         console.log('✅ WhatsApp connected! Warming up for 15s...');
         isReconnecting = false;
-        // Warm-up delay — wait before marking ready to send
         setTimeout(() => {
             isReady = true;
             console.log('✅ WA Ready to send!');
-            processQueue(); // resume queued jobs
+            processQueue();
         }, 15000);
     });
 
@@ -211,7 +210,6 @@ function setupClientEvents() {
     });
 }
 
-// Handle Puppeteer crashes globally
 process.on('unhandledRejection', (reason) => {
     const msg = reason?.message || String(reason);
     if (
@@ -231,7 +229,7 @@ process.on('unhandledRejection', (reason) => {
     console.error('Unhandled rejection:', reason);
 });
 
-// ── QUEUE ──
+// ── BULK QUEUE (for /send — all TARGETS) ──
 const queue = [];
 let processing = false;
 
@@ -243,7 +241,6 @@ async function processQueue() {
 
         resetDaily();
 
-        // Wait for WhatsApp to be ready
         if (!isReady) {
             console.log('⏳ Waiting for WA to be ready...');
             await sleep(15000);
@@ -255,7 +252,6 @@ async function processQueue() {
 
         for (let i = 0; i < TARGETS.length; i++) {
 
-            // 🌙 Sleep check
             while (isSleepTime()) {
                 const current = getISTMinutes();
                 console.log(`🌙 Quiet hours... IST ${Math.floor(current / 60)}:${String(current % 60).padStart(2, '0')}`);
@@ -263,7 +259,6 @@ async function processQueue() {
                 resetDaily();
             }
 
-            // Check WA still ready before each message
             if (!isReady) {
                 console.log('⚠️ WA lost mid-batch — waiting 20s...');
                 await sleep(20000);
@@ -288,7 +283,7 @@ async function processQueue() {
                 } else {
                     await client.sendMessage(jid, job.text);
                 }
-                console.log(`✅ ${i + 1}/${TARGETS.length}`);
+                console.log(`✅ [BULK] ${i + 1}/${TARGETS.length}`);
 
             } catch (err) {
                 const msg = err.message || '';
@@ -308,7 +303,6 @@ async function processQueue() {
                 console.error(`❌ Send error [${i + 1}/${TARGETS.length}]: ${msg}`);
             }
 
-            // ⏱ Delay between messages
             if (i < TARGETS.length - 1 && !batchAborted) {
                 const delay = smartDelay();
                 await sleep(delay);
@@ -321,9 +315,8 @@ async function processQueue() {
             continue;
         }
 
-        console.log('✅ Batch done');
+        console.log('✅ Bulk batch done');
 
-        // 🧍 Big break AFTER batch
         if (shouldTakeBigBreak()) {
             const breakTime = getBigBreak();
             console.log(`🧍 Big break ${(breakTime / 60000).toFixed(1)} min`);
@@ -348,16 +341,11 @@ app.get('/', (req, res) => {
     });
 });
 
+// ── /send — bulk to all TARGETS (Amazon bot uses this) ──
 app.post('/send', upload.single('image'), (req, res) => {
     const secret = req.body?.secret || req.query?.secret;
-
-    if (secret !== SECRET) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    if (!isReady) {
-        return res.status(503).json({ error: 'WhatsApp not ready' });
-    }
+    if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!isReady) return res.status(503).json({ error: 'WhatsApp not ready' });
 
     queue.push({
         text: req.body?.text || '',
@@ -365,8 +353,38 @@ app.post('/send', upload.single('image'), (req, res) => {
     });
 
     processQueue();
-
     res.json({ success: true, queue: queue.length });
+});
+
+// ── /send-single — send to ONE specific group (Flipkart bot uses this) ──
+app.post('/send-single', upload.single('image'), async (req, res) => {
+    const secret = req.body?.secret || req.query?.secret;
+    if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!isReady) return res.status(503).json({ error: 'WhatsApp not ready' });
+
+    const target = req.body?.target;
+    if (!target) return res.status(400).json({ error: 'Missing target group JID' });
+
+    const text = req.body?.text || '';
+    const imageBuffer = req.file?.buffer || null;
+
+    try {
+        if (imageBuffer) {
+            const media = new MessageMedia(
+                'image/jpeg',
+                imageBuffer.toString('base64'),
+                'deal.jpg'
+            );
+            await client.sendMessage(target, media, { caption: text });
+        } else {
+            await client.sendMessage(target, text);
+        }
+        console.log(`✅ [SINGLE] Sent to ${target}`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(`❌ [SINGLE] Failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.listen(PORT, () => {

@@ -1,3 +1,2 @@
-2026/04/29-13:49:25.959 1894 Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\shared_proto_db\metadata/MANIFEST-000001
-2026/04/29-13:49:25.960 1894 Recovering log #3
-2026/04/29-13:49:25.960 1894 Reusing old log C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\shared_proto_db\metadata/000003.log 
+2026/05/02-02:53:31.286 600c Creating DB C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\shared_proto_db\metadata since it was missing.
+2026/05/02-02:53:31.320 600c Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\shared_proto_db\metadata/MANIFEST-000001

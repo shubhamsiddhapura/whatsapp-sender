@@ -1,3 +1,2 @@
-2026/04/29-13:49:25.810 524 Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\Site Characteristics Database/MANIFEST-000001
-2026/04/29-13:49:25.811 524 Recovering log #3
-2026/04/29-13:49:25.812 524 Reusing old log C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\Site Characteristics Database/000003.log 
+2026/05/02-02:53:31.285 5790 Creating DB C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\Site Characteristics Database since it was missing.
+2026/05/02-02:53:31.333 5790 Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\Site Characteristics Database/MANIFEST-000001

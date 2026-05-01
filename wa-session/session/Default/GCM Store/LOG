@@ -1,3 +1,2 @@
-2026/04/29-13:49:34.179 3788 Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\GCM Store/MANIFEST-000001
-2026/04/29-13:49:34.181 3788 Recovering log #3
-2026/04/29-13:49:34.184 3788 Reusing old log C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\GCM Store/000003.log 
+2026/05/02-02:53:39.036 43e0 Creating DB C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\GCM Store since it was missing.
+2026/05/02-02:53:39.048 43e0 Reusing MANIFEST C:\Users\Shubh Tanna\whatsapp-sender\wa-session\session\Default\GCM Store/MANIFEST-000001
