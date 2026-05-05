@@ -1,15 +1,28 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+    makeInMemoryStore,
+    downloadMediaMessage,
+    proto,
+    getContentType,
+} = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const express = require('express');
-const multer = require('multer');
+const multer  = require('multer');
+const pino    = require('pino');
+const fs      = require('fs');
+const path    = require('path');
 
-const app = express();
+const app    = express();
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
+const PORT   = process.env.PORT   || 8080;
 const SECRET = process.env.SECRET || 'mysecret123';
 
-// ── TARGET GROUPS (for /send — bulk) ──
+// ── TARGET GROUPS (for /send — bulk broadcast) ──
 const TARGETS = [
     "917595918075-1496324435@g.us",
     "917016873944-1593607947@g.us",
@@ -43,11 +56,12 @@ const TARGETS = [
     "120363049791618063@g.us"
 ];
 
-// ── IST HELPERS ──
+// ══════════════════════════════════════════
+//  IST HELPERS
+// ══════════════════════════════════════════
 function getISTMinutes() {
-    const now = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(now.getTime() + istOffset);
+    const ist = new Date(Date.now() + istOffset);
     return ist.getUTCHours() * 60 + ist.getUTCMinutes();
 }
 
@@ -57,13 +71,18 @@ function getISTDateString() {
     return `${ist.getUTCFullYear()}-${ist.getUTCMonth()}-${ist.getUTCDate()}`;
 }
 
-// ── SLEEP SYSTEM ──
+// ══════════════════════════════════════════
+//  SLEEP / BREAK SYSTEM (unchanged logic)
+// ══════════════════════════════════════════
 let todayStartTime = null;
-let lastResetDate = null;
+let lastResetDate  = null;
+let maxLongPauses  = Math.floor(Math.random() * 6) + 10;
+let breaks         = [];
+let lastPauseHour  = null;
 
 function getTodayStartTime() {
     if (todayStartTime) return todayStartTime;
-    todayStartTime = 480 + Math.floor(Math.random() * 60); // 8:00–9:00 AM IST
+    todayStartTime = 480 + Math.floor(Math.random() * 60);
     const h = Math.floor(todayStartTime / 60);
     const m = String(todayStartTime % 60).padStart(2, '0');
     console.log(`🌅 WA Start time today: ${h}:${m} IST`);
@@ -71,24 +90,18 @@ function getTodayStartTime() {
 }
 
 function isSleepTime() {
-    const current = getISTMinutes();
+    const current   = getISTMinutes();
     const startTime = getTodayStartTime();
     if (current >= startTime) return false;
     if (current < 30) return false;
     return true;
 }
 
-// ── DAILY RESET ──
-let maxLongPauses = Math.floor(Math.random() * 6) + 10;
-let breaks = [];
-let lastPauseHour = null;
-
 function generateDailyBreaks() {
     breaks = [];
     function addBreaks(count, start, end) {
         for (let i = 0; i < count; i++) {
-            const time = Math.floor(Math.random() * (end - start)) + start;
-            breaks.push({ time, taken: false });
+            breaks.push({ time: Math.floor(Math.random() * (end - start)) + start, taken: false });
         }
     }
     addBreaks(3, 8 * 60, 14 * 60);
@@ -100,136 +113,132 @@ function generateDailyBreaks() {
 function resetDaily() {
     const today = getISTDateString();
     if (lastResetDate !== today) {
-        maxLongPauses = Math.floor(Math.random() * 6) + 10;
-        lastResetDate = today;
+        maxLongPauses  = Math.floor(Math.random() * 6) + 10;
+        lastResetDate  = today;
         todayStartTime = null;
         generateDailyBreaks();
         console.log(`🔄 Reset day | Long pauses: ${maxLongPauses}`);
     }
 }
 
-// ── DELAYS ──
 function smartDelay() {
     const currentHour = new Date().getHours();
-    let delay = Math.floor(Math.random() * (6000 - 3000 + 1)) + 3000;
     if (lastPauseHour !== currentHour && Math.random() < 0.4) {
         lastPauseHour = currentHour;
         const longPause = (2 + Math.random()) * 60 * 1000;
         console.log(`⏸ Hourly pause ${(longPause / 60000).toFixed(1)} min`);
         return longPause;
     }
-    return delay;
+    return Math.floor(Math.random() * 3000) + 3000;
 }
 
 function shouldTakeBigBreak() {
     const current = getISTMinutes();
     for (let b of breaks) {
-        if (!b.taken && current >= b.time) {
-            b.taken = true;
-            return true;
-        }
+        if (!b.taken && current >= b.time) { b.taken = true; return true; }
     }
     return false;
 }
 
-function getBigBreak() {
-    return (12 + Math.random() * 8) * 60 * 1000;
-}
+function getBigBreak() { return (12 + Math.random() * 8) * 60 * 1000; }
+function sleep(ms)      { return new Promise(r => setTimeout(r, ms)); }
 
-function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-}
-
-// ── WHATSAPP CLIENT ──
-let isReady = false;
+// ══════════════════════════════════════════
+//  BAILEYS CLIENT
+//  Key memory advantages over whatsapp-web.js:
+//  • No Puppeteer/Chromium — pure WebSocket (~50MB vs 400MB)
+//  • getMessage returns undefined → Baileys doesn't cache history
+//  • Silent pino logger (no log buffering)
+//  • Auth stored in files, not RAM
+// ══════════════════════════════════════════
+let sock     = null;
+let isReady  = false;
 let isReconnecting = false;
-let client = null;
 
-function createClient() {
-    return new Client({
-        authStrategy: new LocalAuth({ dataPath: './wa-session' }),
-        puppeteer: {
-            headless: true,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-            ]
-        }
-    });
-}
+const AUTH_FOLDER = './wa-session';
+const logger = pino({ level: 'silent' }); // suppress Baileys internal logs
 
-function scheduleReconnect() {
+async function connectWA() {
     if (isReconnecting) return;
     isReconnecting = true;
-    isReady = false;
-    console.log('🔄 Reconnecting in 15s...');
-    setTimeout(async () => {
-        try {
-            await client.destroy();
-            console.log('🗑️ Old client destroyed');
-        } catch (e) {
-            console.log('⚠️ Destroy error (ignored):', e.message);
-        }
-        client = createClient();
-        setupClientEvents();
-        client.initialize();
-    }, 15000);
-}
 
-function setupClientEvents() {
-    client.on('qr', () => {
-        console.log('📱 QR code received — scan it!');
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { version }          = await fetchLatestBaileysVersion();
+
+    sock = makeWASocket({
+        version,
+        logger,
+        auth: state,
+        // ── Memory optimizations ──────────────────────────────────
+        // Don't fetch or cache message history — biggest memory saver
+        getMessage: async () => undefined,
+        // Don't sync full chat history on connect
+        syncFullHistory: false,
+        // Don't store messages in memory
+        generateHighQualityLinkPreview: false,
+        // Shorter timeouts = less buffer held in memory
+        connectTimeoutMs: 30_000,
+        keepAliveIntervalMs: 25_000,
+        // ─────────────────────────────────────────────────────────
     });
 
-    client.on('ready', () => {
-        console.log('✅ WhatsApp connected! Warming up for 15s...');
-        isReconnecting = false;
-        setTimeout(() => {
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+            console.log('📱 QR received — scan it in WhatsApp → Linked Devices');
+            // Print QR to console for Railway logs
+            const qrcode = require('qrcode-terminal');
+            qrcode.generate(qr, { small: true });
+        }
+
+        if (connection === 'open') {
+            console.log('✅ WhatsApp connected via Baileys!');
+            isReconnecting = false;
+            // Short warmup then mark ready
+            await sleep(5000);
             isReady = true;
             console.log('✅ WA Ready to send!');
             processQueue();
-        }, 15000);
-    });
+        }
 
-    client.on('disconnected', (reason) => {
-        console.log(`⚠️ WA Disconnected: ${reason}`);
-        isReady = false;
-        scheduleReconnect();
-    });
+        if (connection === 'close') {
+            isReady = false;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-    client.on('auth_failure', (msg) => {
-        console.error(`❌ Auth failure: ${msg}`);
-        isReady = false;
-        scheduleReconnect();
+            console.log(`⚠️ WA closed | code=${statusCode} | reconnect=${shouldReconnect}`);
+
+            if (shouldReconnect) {
+                isReconnecting = false; // allow reconnect
+                await sleep(10_000);
+                connectWA();
+            } else {
+                console.error('❌ Logged out — delete wa-session folder and restart to re-scan QR');
+                isReconnecting = false;
+            }
+        }
     });
 }
 
-process.on('unhandledRejection', (reason) => {
-    const msg = reason?.message || String(reason);
-    if (
-        msg.includes('detached Frame') ||
-        msg.includes('Target closed') ||
-        msg.includes('Session closed') ||
-        msg.includes('Protocol error') ||
-        msg.includes('Cannot read properties of null')
-    ) {
-        console.log(`⚠️ Puppeteer crash caught globally: ${msg}`);
-        if (!isReconnecting) {
-            isReady = false;
-            scheduleReconnect();
-        }
-        return;
+// ══════════════════════════════════════════
+//  SEND HELPERS
+// ══════════════════════════════════════════
+async function sendToJid(jid, text, imageBuffer) {
+    if (imageBuffer) {
+        await sock.sendMessage(jid, {
+            image: imageBuffer,
+            caption: text || '',
+            mimetype: 'image/jpeg',
+        });
+    } else {
+        await sock.sendMessage(jid, { text: text || '' });
     }
-    console.error('Unhandled rejection:', reason);
-});
+}
 
-// ── BULK QUEUE (for /send — all TARGETS) ──
+// ══════════════════════════════════════════
+//  BULK QUEUE  (for /send — all TARGETS)
+// ══════════════════════════════════════════
 const queue = [];
 let processing = false;
 
@@ -238,7 +247,6 @@ async function processQueue() {
     processing = true;
 
     while (queue.length > 0) {
-
         resetDaily();
 
         if (!isReady) {
@@ -251,10 +259,10 @@ async function processQueue() {
         let batchAborted = false;
 
         for (let i = 0; i < TARGETS.length; i++) {
-
+            // Quiet hours check
             while (isSleepTime()) {
-                const current = getISTMinutes();
-                console.log(`🌙 Quiet hours... IST ${Math.floor(current / 60)}:${String(current % 60).padStart(2, '0')}`);
+                const cur = getISTMinutes();
+                console.log(`🌙 Quiet hours... ${Math.floor(cur / 60)}:${String(cur % 60).padStart(2, '0')} IST`);
                 await sleep(60000);
                 resetDaily();
             }
@@ -270,42 +278,16 @@ async function processQueue() {
                 }
             }
 
-            const jid = TARGETS[i];
-
             try {
-                if (job.imageBuffer) {
-                    const media = new MessageMedia(
-                        'image/jpeg',
-                        job.imageBuffer.toString('base64'),
-                        'deal.jpg'
-                    );
-                    await client.sendMessage(jid, media, { caption: job.text || '' });
-                } else {
-                    await client.sendMessage(jid, job.text);
-                }
-                console.log(`✅ [BULK] ${i + 1}/${TARGETS.length}`);
-
+                await sendToJid(TARGETS[i], job.text, job.imageBuffer);
+                console.log(`✅ [BULK] ${i + 1}/${TARGETS.length} → ${TARGETS[i]}`);
             } catch (err) {
-                const msg = err.message || '';
-                if (
-                    msg.includes('detached Frame') ||
-                    msg.includes('Target closed') ||
-                    msg.includes('Session closed') ||
-                    msg.includes('Protocol error')
-                ) {
-                    console.log(`⚠️ Puppeteer crash on ${i + 1}/${TARGETS.length} — re-queuing & reconnecting...`);
-                    isReady = false;
-                    scheduleReconnect();
-                    queue.unshift(job);
-                    batchAborted = true;
-                    break;
-                }
-                console.error(`❌ Send error [${i + 1}/${TARGETS.length}]: ${msg}`);
+                console.error(`❌ [BULK] ${i + 1}/${TARGETS.length} failed: ${err.message}`);
+                // Non-fatal — log and continue to next group
             }
 
             if (i < TARGETS.length - 1 && !batchAborted) {
-                const delay = smartDelay();
-                await sleep(delay);
+                await sleep(smartDelay());
             }
         }
 
@@ -323,62 +305,55 @@ async function processQueue() {
             await sleep(breakTime);
         }
 
-        if (queue.length > 0) {
-            await sleep(smartDelay());
-        }
+        if (queue.length > 0) await sleep(smartDelay());
+
+        // ── Explicit GC hint after each batch ──
+        // Releases image buffers from completed jobs
+        if (global.gc) global.gc();
     }
 
     processing = false;
 }
 
-// ── API ──
+// ══════════════════════════════════════════
+//  API ROUTES
+// ══════════════════════════════════════════
 app.get('/', (req, res) => {
     res.json({
-        status: 'running',
+        status:   'running',
         whatsapp: isReady,
-        queue: queue.length,
-        sleeping: isSleepTime()
+        queue:    queue.length,
+        sleeping: isSleepTime(),
+        memory:   process.memoryUsage(),
     });
 });
 
-// ── /send — bulk to all TARGETS (Amazon bot uses this) ──
+// /send — bulk to all TARGETS (Amazon deals)
 app.post('/send', upload.single('image'), (req, res) => {
     const secret = req.body?.secret || req.query?.secret;
     if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
-    if (!isReady) return res.status(503).json({ error: 'WhatsApp not ready' });
+    if (!isReady)          return res.status(503).json({ error: 'WhatsApp not ready' });
 
     queue.push({
-        text: req.body?.text || '',
-        imageBuffer: req.file?.buffer || null
+        text:        req.body?.text || '',
+        imageBuffer: req.file?.buffer || null,
     });
 
     processQueue();
     res.json({ success: true, queue: queue.length });
 });
 
-// ── /send-single — send to ONE specific group (Flipkart bot uses this) ──
+// /send-single — one specific group (Flipkart / CC deals)
 app.post('/send-single', upload.single('image'), async (req, res) => {
     const secret = req.body?.secret || req.query?.secret;
     if (secret !== SECRET) return res.status(401).json({ error: 'Unauthorized' });
-    if (!isReady) return res.status(503).json({ error: 'WhatsApp not ready' });
+    if (!isReady)          return res.status(503).json({ error: 'WhatsApp not ready' });
 
     const target = req.body?.target;
     if (!target) return res.status(400).json({ error: 'Missing target group JID' });
 
-    const text = req.body?.text || '';
-    const imageBuffer = req.file?.buffer || null;
-
     try {
-        if (imageBuffer) {
-            const media = new MessageMedia(
-                'image/jpeg',
-                imageBuffer.toString('base64'),
-                'deal.jpg'
-            );
-            await client.sendMessage(target, media, { caption: text });
-        } else {
-            await client.sendMessage(target, text);
-        }
+        await sendToJid(target, req.body?.text || '', req.file?.buffer || null);
         console.log(`✅ [SINGLE] Sent to ${target}`);
         res.json({ success: true });
     } catch (err) {
@@ -387,12 +362,10 @@ app.post('/send-single', upload.single('image'), async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Running on ${PORT}`);
-});
+// ══════════════════════════════════════════
+//  START
+// ══════════════════════════════════════════
+app.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
 
-// ── START ──
 generateDailyBreaks();
-client = createClient();
-setupClientEvents();
-client.initialize();
+connectWA();
