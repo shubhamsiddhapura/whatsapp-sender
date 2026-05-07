@@ -93,7 +93,7 @@ function isSleepTime() {
     const current   = getISTMinutes();
     const startTime = getTodayStartTime();
     if (current >= startTime) return false;
-    if (current < 30) return false;
+    if (current < 60) return false;;
     return true;
 }
 
