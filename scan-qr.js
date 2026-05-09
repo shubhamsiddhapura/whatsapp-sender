@@ -1,57 +1,81 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+} = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
+const qrcode   = require('qrcode-terminal');
+const pino     = require('pino');
 
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: './wa-session' }),
-    puppeteer: {
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-    }
-});
+const AUTH_FOLDER = './wa-session';
+const logger = pino({ level: 'silent' });
 
-client.on('qr', qr => {
-    console.log('\n📱 Scan this QR with WhatsApp:\n');
-    qrcode.generate(qr, { small: true });
-});
+async function start() {
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
+    const { version }          = await fetchLatestBaileysVersion();
 
-client.on('ready', async () => {
-    console.log('\n✅ WhatsApp connected successfully!');
-    console.log('📁 Session saved in ./wa-session folder');
-    console.log('\n👥 Fetching your groups...\n');
-
-    const chats = await client.getChats();
-    const groups = chats.filter(c => c.isGroup);
-    const channels = chats.filter(c => c.isChannel);
-
-    console.log('─'.repeat(70));
-    console.log('GROUPS:');
-    groups.forEach(g => {
-        const name = (g.name || 'Unknown').padEnd(40);
-        const id = g.id._serialized;
-        console.log(`  ${name} → ${id}`);
+    const sock = makeWASocket({
+        version,
+        logger,
+        auth: state,
+        getMessage: async () => undefined,
+        syncFullHistory: false,
     });
 
-    console.log('\nCHANNELS:');
-    channels.forEach(c => {
-        const name = (c.name || 'Unknown').padEnd(40);
-        const id = c.id._serialized;
-        console.log(`  ${name} → ${id}`);
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+            console.log('\n📱 Scan this QR with WhatsApp → Linked Devices:\n');
+            qrcode.generate(qr, { small: true });
+        }
+
+        if (connection === 'open') {
+            console.log('\n✅ WhatsApp connected successfully!');
+            console.log('📁 Session saved in ./wa-session folder');
+            console.log('\n👥 Fetching your groups...\n');
+
+            // Give Baileys a moment to sync group metadata
+            await new Promise(r => setTimeout(r, 5000));
+
+            try {
+                const groups = await sock.groupFetchAllParticipating();
+                const entries = Object.entries(groups);
+
+                console.log('─'.repeat(70));
+                console.log('GROUPS:');
+                entries.forEach(([id, meta]) => {
+                    const name = (meta.subject || 'Unknown').padEnd(40);
+                    console.log(`  ${name} → ${id}`);
+                });
+                console.log('─'.repeat(70));
+                console.log(`\nTotal Groups: ${entries.length}`);
+            } catch (err) {
+                console.error('⚠️  Could not fetch groups:', err.message);
+            }
+
+            console.log('\n⏳ Saving session... wait 15 seconds...');
+            setTimeout(() => {
+                console.log('✅ Done! Session saved. You can close this now.');
+                process.exit(0);
+            }, 15000);
+        }
+
+        if (connection === 'close') {
+            const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log('❌ Auth failed! Delete wa-session folder and try again.');
+                process.exit(1);
+            }
+            // Any other close during QR scan — just exit so user can retry
+            console.log('⚠️  Connection closed. Please run this script again.');
+            process.exit(1);
+        }
     });
+}
 
-    console.log('─'.repeat(70));
-    console.log(`\nTotal Groups: ${groups.length}`);
-    console.log(`Total Channels: ${channels.length}`);
-    console.log('\n⏳ Saving session... wait 30 seconds...');
-
-    setTimeout(() => {
-        console.log('✅ Done! Session saved. You can close this now.');
-        process.exit(0);
-    }, 30000);
-});
-
-client.on('auth_failure', () => {
-    console.log('❌ Auth failed! Delete wa-session folder and try again.');
+start().catch(err => {
+    console.error('❌ Fatal error:', err);
     process.exit(1);
 });
-
-client.initialize();
