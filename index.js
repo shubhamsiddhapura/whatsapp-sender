@@ -171,7 +171,10 @@ async function connectWA() {
         auth: state,
         // ── Memory optimizations ──────────────────────────────────
         // Don't fetch or cache message history — biggest memory saver
-        getMessage: async () => undefined,
+        getMessage: async (key) => {
+        // Return a placeholder so Baileys doesn't retry forever
+        return { conversation: '' };
+    },
         // Don't sync full chat history on connect
         syncFullHistory: false,
         // Don't store messages in memory
@@ -181,6 +184,14 @@ async function connectWA() {
         keepAliveIntervalMs: 25_000,
         // ─────────────────────────────────────────────────────────
     });
+
+    sock.ev.on('messages.upsert', () => {}); // consume silently
+
+// Suppress Bad MAC noise from other people's messages
+process.on('unhandledRejection', (err) => {
+    if (err?.message?.includes('Bad MAC')) return; // ignore
+    console.error('Unhandled:', err);
+});
 
     sock.ev.on('creds.update', saveCreds);
 
